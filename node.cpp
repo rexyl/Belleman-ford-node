@@ -113,19 +113,91 @@ std::string getlocal() {
 typedef std::unordered_map<string,dvec_seg> dv_type;
 dv_type dvec;
 std::unordered_map<string,neighbor_seg> neighbor_list;
+int sendfd;
+struct sockaddr_in myaddr_s, remaddr_s,myaddr_r,remaddr_r;
+int rev_fd;             /* receive socket */
+void init_recvsock(int port){
+    if ((rev_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("cannot create socket\n");
+        return;
+    }
+    socklen_t addrlen = sizeof(remaddr_r);        /* length of addresses */
+    memset((char *)&myaddr_r, 0, sizeof(myaddr_r));
+    myaddr_r.sin_family = AF_INET;
+    myaddr_r.sin_addr.s_addr = htonl(INADDR_ANY);
+    myaddr_r.sin_port = htons(port);
+    if (bind(rev_fd, (struct sockaddr *)&myaddr_r, sizeof(myaddr_r)) < 0) {
+        perror("bind failed");
+        return;
+    }
+}
+void init_sendsock(int port){
+    if ((sendfd=socket(AF_INET, SOCK_DGRAM, 0))==-1)
+        printf("socket created\n");
+    memset((char *)&myaddr_s, 0, sizeof(myaddr_s));
+    myaddr_s.sin_family = AF_INET;
+    myaddr_s.sin_addr.s_addr = htonl(INADDR_ANY);
+    myaddr_s.sin_port = htons(port);
+//    if (bind(sendfd, (struct sockaddr *)&myaddr_s, sizeof(myaddr_s)) < 0) {
+//        perror("bind failed");
+//        return;
+//    }
+}
+void send_string_to(string ip,int port,string &content){
+    string server = ip;
+    memset((char *) &remaddr_s, 0, sizeof(remaddr_s));
+    int slen=sizeof(remaddr_s);
+    remaddr_s.sin_family = AF_INET;
+    remaddr_s.sin_port = htons(port);
+    if (inet_aton(server.c_str(), &remaddr_s.sin_addr)==0) {
+        fprintf(stderr, "inet_aton() failed\n");
+        exit(1);
+    }
+    //std::string s = "here we go with first one!";
+    if (sendto(sendfd, content.c_str(), content.size(), 0, (struct sockaddr *)&remaddr_s, slen)==-1)
+        perror("sendto");
+}
 
+void construct_buffer(string &s){
+    s.clear();
+    s += local_identify+",";
+    for (auto &x:dvec)
+    {
+        dvec_seg ds = x.second;
+        s += ds.dest_ip+","+std::to_string(ds.dest_port)+","+std::to_string(ds.cost)+","+ds.link+",";
+    }
+    s.pop_back();
+    return;
+}
 void send_neighbor(){
+    string s;
+    construct_buffer(s);
     for (auto &neigh:neighbor_list)
     {
-        //modify write socket ip as neigh.dest_ip, port as dest_port
-        //send dvec through socket
-        //        if (sendto(fd, resend_buffer_v[i].buffer, 20+BUFSIZE, 0, (struct sockaddr *)&remaddr, slen)==-1)
-        //            perror("sendto");
+        send_string_to(neigh.second.dest_ip, neigh.second.dest_port, s);
     }
     gettimeofday(&last_send,NULL);
 }
-void construct_dv(string s,dv_type &n){
-
+string construct_dv(string s,dv_type &n){
+    std::stringstream ss(s);
+    string token,identify;
+    std::getline(ss, token, ',');
+    identify = token;
+    n.clear();
+    int i = 0;
+    string tmp[4];
+    while (std::getline(ss, token, ',')) {
+        tmp[i]=token;
+        if (++i>3) {
+            i = 0;
+            for (int j=0; j<4; j++) {
+                dvec_seg ds(tmp[0],std::stoi(tmp[1]),std::stoi(tmp[2]),tmp[3]);
+                n[ds.dest()] = ds;
+            }
+        }
+        //std::cout<<token<<std::endl;
+    }
+    return identify;
 }
 void update_dv(string from_ip,int from_port,dv_type &n){
     //encapsure vector we received as neighbor_seg sothat ez to update
@@ -275,6 +347,24 @@ void break_link(string ip,int port){
     
     send_neighbor();
 }
+void receiver(){
+    char buf[1024];
+    socklen_t addrlen = sizeof(remaddr_r);        /* length of addresses */
+    string dest,ip,port;
+    size_t pos;
+    dv_type n;
+    while(1){
+        recvfrom(rev_fd, buf, 1024, 0, (struct sockaddr *)&remaddr_r, &addrlen);
+        string s(buf,strlen(buf));
+        dest = construct_dv(s, n);
+        pos = dest.find(":");
+        ip = dest.substr(0,pos+1);
+        port = dest.substr(pos+1);
+        update_dv(ip, std::stoi(port), n);
+    }
+    return;
+}
+
 void b(){
     dv_type tmp;
     dvec_seg ds1("C",4117,10,"C:4117");
@@ -304,7 +394,8 @@ int main(int argc, char const *argv[])
         return 0;
     }
     int local_port = atoi(argv[1]);
-    local_identify = getlocal()+std::to_string(local_port);
+    //local_identify = getlocal()+":"+std::to_string(local_port);
+    local_identify = "A:"+std::to_string(local_port);
     int TIMEOUT = atoi(argv[2]);
     for (int i = 3; i < argc; ++i)
     {
@@ -315,13 +406,21 @@ int main(int argc, char const *argv[])
         dvec[l] = dvec_seg(ip,port,w,l);
         neighbor_list[l] = neighbor_seg(ip,port,w,l);
     }
-    d();
-    show_dv();
-    b();
-    show_dv();
-    //show_nv();
-    break_link("B", 4116);
-    show_dv();
-    //show_nv();
+    gettimeofday(&last_send,NULL);
+//    d();
+//    show_dv();
+//    b();
+//    show_dv();
+//    //show_nv();
+//    break_link("B", 4116);
+//    show_dv();
+//    //show_nv();
+//    string trash;
+//    construct_buffer(trash);
+//    std::cout<<trash<<std::endl;
+//    dv_type tm;
+//    dvec.clear();
+//    construct_dv(trash, dvec);
+//    show_dv();
     return 0;
 }
