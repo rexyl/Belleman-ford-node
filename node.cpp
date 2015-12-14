@@ -24,6 +24,7 @@ typedef std::string string;
 
 string local_identify;
 timeval last_send;
+int TIMEOUT=5;
 class dvec_seg
 {
 public:
@@ -91,7 +92,8 @@ std::string getlocal() {
             char addressBuffer[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
             if (!strncmp(ifa->ifa_name,"en0",3) ) {
-                std::string s(addressBuffer,INET_ADDRSTRLEN);
+                //std::string s(addressBuffer,INET_ADDRSTRLEN);
+                std::string s(addressBuffer,strlen(addressBuffer));
                 return s;
             }
             //printf("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
@@ -101,7 +103,8 @@ std::string getlocal() {
             char addressBuffer[INET6_ADDRSTRLEN];
             inet_ntop(AF_INET6, tmpAddrPtr, addressBuffer, INET6_ADDRSTRLEN);
             if (!strncmp(ifa->ifa_name,"en0",3) ) {
-                std::string s(addressBuffer,INET_ADDRSTRLEN);
+                //std::string s(addressBuffer,INET_ADDRSTRLEN);
+                std::string s(addressBuffer,strlen(addressBuffer));
                 return s;
             }
             //printf("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
@@ -137,13 +140,15 @@ void init_sendsock(int port){
     memset((char *)&myaddr_s, 0, sizeof(myaddr_s));
     myaddr_s.sin_family = AF_INET;
     myaddr_s.sin_addr.s_addr = htonl(INADDR_ANY);
-    myaddr_s.sin_port = htons(port);
-//    if (bind(sendfd, (struct sockaddr *)&myaddr_s, sizeof(myaddr_s)) < 0) {
-//        perror("bind failed");
-//        return;
-//    }
+    //myaddr_s.sin_port = htons(port);
+    if (bind(sendfd, (struct sockaddr *)&myaddr_s, sizeof(myaddr_s)) < 0) {
+        perror("bind failed");
+        return;
+    }
 }
 void send_string_to(string ip,int port,string &content){
+    string content_with_id = content;
+    content_with_id = ip+":"+std::to_string(port)+","+content_with_id;
     string server = ip;
     memset((char *) &remaddr_s, 0, sizeof(remaddr_s));
     int slen=sizeof(remaddr_s);
@@ -154,7 +159,7 @@ void send_string_to(string ip,int port,string &content){
         exit(1);
     }
     //std::string s = "here we go with first one!";
-    if (sendto(sendfd, content.c_str(), content.size(), 0, (struct sockaddr *)&remaddr_s, slen)==-1)
+    if (sendto(sendfd, content_with_id.c_str(), content_with_id.size(), 0, (struct sockaddr *)&remaddr_s, slen)==-1)
         perror("sendto");
 }
 
@@ -178,11 +183,22 @@ void send_neighbor(){
     }
     gettimeofday(&last_send,NULL);
 }
-string construct_dv(string s,dv_type &n){
+void send_neighbor(string identify){
+    string s = "LINKDOWN,"+local_identify;
+    for (auto &neigh:neighbor_list)
+    {
+        if(neigh.second.dest()==identify)
+            send_string_to(neigh.second.dest_ip, neigh.second.dest_port, s);
+    }
+    gettimeofday(&last_send,NULL);
+}
+string construct_dv(string s,dv_type &n,string &from){
     std::stringstream ss(s);
     string token,identify;
     std::getline(ss, token, ',');
     identify = token;
+    std::getline(ss, token, ',');
+    from = token;
     n.clear();
     int i = 0;
     string tmp[4];
@@ -218,12 +234,14 @@ void update_dv(string from_ip,int from_port,dv_type &n){
     for (auto &x:n)
     {
         auto entry = x.second;
-        if(entry.dest() == local_identify)
+        if(entry.dest() == local_identify){
             continue;
+        }
+        
         auto it = dvec.find(entry.dest());//for same destination, compare cur with the one neighbor provide
         //auto it2 = dvec.find(from); //find neighbor in local dv
         if(it!=dvec.end()){
-            if(INT_MAX - it2->second.cost >= entry.cost && it->second.cost > it2->second.cost+entry.cost){
+            if(INT_MAX-1000 - it2->second.cost > entry.cost && it->second.cost > it2->second.cost+entry.cost){
                 it->second.cost = it2->second.cost+entry.cost;
                 it->second.link = from;
                 modify =1;
@@ -231,7 +249,7 @@ void update_dv(string from_ip,int from_port,dv_type &n){
             else if(it->second.link == from){  //however, if you have no choice, you update you path
                 //to this dest by selecting from all neighbot again.
                 string record;
-                int best = INT_MAX;
+                int best = INT_MAX-1000;
                 for(auto &x:neighbor_list){
                     if(x.second.v.find(entry.dest()) == x.second.v.end() ) //cur neigh do not have a path to dest
                         continue;
@@ -257,7 +275,7 @@ void update_dv(string from_ip,int from_port,dv_type &n){
     return;
 }
 
-void counter(int TIMEOUT){
+void counter(){
     sleep(TIMEOUT);
     timeval now;
     int sleeptime;
@@ -311,30 +329,31 @@ void break_link(string ip,int port){
         std::cout<<"The link you want to break does not exist\n";
         return;
     }
-    it->second.cost = INT_MAX;
+    it->second.cost = INT_MAX-1000;
     
     auto it1 = dvec.find(tmp);
     if(it1 == dvec.end()){
         std::cout<<"The link you want to break does not exist\n";
         return;
     }
-    it1->second.cost = INT_MAX;
+    send_neighbor(tmp);
+    it1->second.cost = INT_MAX-1000;
     
     string record;
     int best;
     for (auto &y:dvec) {
         if(y.second.link == tmp){
             string dest = y.second.dest();
-            best = INT_MAX;
+            best = INT_MAX-1000;
             //set to infi
-            y.second.cost = INT_MAX;
+            y.second.cost = INT_MAX-1000;
             
             string record;
-            int best = INT_MAX;
+            int best = INT_MAX-1000;
             for(auto &x:neighbor_list){
                 if(x.second.v.find(tmp) == x.second.v.end() ) //cur neigh do not have a path to dest
                     continue;
-                if(INT_MAX - x.second.cost>x.second.v[dest].cost && x.second.cost+x.second.v[dest].cost < best){
+                if(INT_MAX-1000 - x.second.cost>x.second.v[dest].cost && x.second.cost+x.second.v[dest].cost < best){
                     best = x.second.cost+x.second.v[dest].cost;
                     record = x.second.dest();
                 }
@@ -343,24 +362,41 @@ void break_link(string ip,int port){
             y.second.link = record;    //dest here means ip+port
         }
     }
-    
-    
     send_neighbor();
 }
 void receiver(){
     char buf[1024];
     socklen_t addrlen = sizeof(remaddr_r);        /* length of addresses */
-    string dest,ip,port;
+    string identify,ip,port;
     size_t pos;
     dv_type n;
     while(1){
         recvfrom(rev_fd, buf, 1024, 0, (struct sockaddr *)&remaddr_r, &addrlen);
         string s(buf,strlen(buf));
-        dest = construct_dv(s, n);
-        pos = dest.find(":");
-        ip = dest.substr(0,pos+1);
-        port = dest.substr(pos+1);
-        update_dv(ip, std::stoi(port), n);
+        if(s.substr(0,8)=="LINKDOWN"){
+            string downlink = s.substr(8);
+            auto it = dvec.find(downlink);
+            neighbor_list[downlink].cost = INT_MAX - 1000;
+            if(it!=dvec.end()){
+                it->second.cost = INT_MAX-1000;
+                it->second.link = "";
+                send_neighbor();
+            }
+            continue;
+            //send_neighbor(downlink);
+        }
+        string from;
+        int fromport;
+        identify = construct_dv(s, n,from);
+        if(identify == "LINKDOWN")
+        local_identify = identify;
+        pos = identify.find(":");
+        ip = identify.substr(0,pos);
+        port = identify.substr(pos+1);
+        pos = from.find(":");
+        fromport = stoi(from.substr(pos+1));
+        from = from.substr(0,pos);
+        update_dv(from, fromport, n);
     }
     return;
 }
@@ -393,10 +429,13 @@ int main(int argc, char const *argv[])
         std::cout<<"Wrong input format!\n";
         return 0;
     }
+    std::cout<<"Welcome!\n";
     int local_port = atoi(argv[1]);
-    //local_identify = getlocal()+":"+std::to_string(local_port);
-    local_identify = "A:"+std::to_string(local_port);
-    int TIMEOUT = atoi(argv[2]);
+    init_recvsock(local_port);
+    init_sendsock(0);
+    local_identify = getlocal()+":"+std::to_string(local_port);
+    //local_identify = "A:"+std::to_string(local_port);
+    TIMEOUT = atoi(argv[2]);
     for (int i = 3; i < argc; ++i)
     {
         string ip = argv[i++];
@@ -407,20 +446,44 @@ int main(int argc, char const *argv[])
         neighbor_list[l] = neighbor_seg(ip,port,w,l);
     }
     gettimeofday(&last_send,NULL);
-//    d();
-//    show_dv();
-//    b();
-//    show_dv();
-//    //show_nv();
-//    break_link("B", 4116);
-//    show_dv();
-//    //show_nv();
-//    string trash;
-//    construct_buffer(trash);
-//    std::cout<<trash<<std::endl;
-//    dv_type tm;
-//    dvec.clear();
-//    construct_dv(trash, dvec);
-//    show_dv();
+    std::thread r(receiver);
+    std::thread c(counter);
+    r.detach();
+    c.detach();
+    char buffer[256];
+    while(1)
+    {
+        printf("Command: ");
+        bzero(buffer,256);
+        fgets(buffer,255,stdin);
+        if (!strncmp(buffer, "SHOWRT", 6)) {
+            show_dv();
+        }
+        else if (!strncmp(buffer, "LINKDOWN", 8)) {
+            string tmp(buffer+9);
+            size_t pos = tmp.find(" ");
+            string ip = tmp.substr(0,pos);
+            int port = atoi(tmp.substr(pos).c_str());
+            break_link(ip,port);
+        }
+        else{
+            std::cout<<"Bad input\n";
+        }
+    }
+    //    d();
+    //    show_dv();
+    //    b();
+    //    show_dv();
+    //    //show_nv();
+    //    break_link("B", 4116);
+    //    show_dv();
+    //    //show_nv();
+    //    string trash;
+    //    construct_buffer(trash);
+    //    std::cout<<trash<<std::endl;
+    //    dv_type tm;
+    //    dvec.clear();
+    //    construct_dv(trash, dvec);
+    //    show_dv();
     return 0;
 }
