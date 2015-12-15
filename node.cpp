@@ -25,6 +25,8 @@ typedef std::string string;
 string local_identify;
 timeval last_send;
 int TIMEOUT=5;
+bool writelock=0;
+int sendcount = 0;
 class dvec_seg
 {
 public:
@@ -115,7 +117,7 @@ std::string getlocal() {
 }
 typedef std::unordered_map<string,dvec_seg> dv_type;
 dv_type dvec;
-std::unordered_map<string,neighbor_seg> neighbor_list;
+std::unordered_map<string,neighbor_seg> neighbor_list,neighbor_list_backup;
 int sendfd;
 struct sockaddr_in myaddr_s, remaddr_s,myaddr_r,remaddr_r;
 int rev_fd;             /* receive socket */
@@ -148,7 +150,12 @@ void init_sendsock(int port){
 }
 void send_string_to(string ip,int port,string &content){
     string content_with_id = content;
-    content_with_id = ip+":"+std::to_string(port)+","+content_with_id;
+    if (content.substr(0,8)!="LINKDOWN" && content.substr(0,6)!="LINKUP") {
+        content_with_id = ip+":"+std::to_string(port)+","+content_with_id;
+    }
+    else{
+        int i=0;
+    }
     string server = ip;
     memset((char *) &remaddr_s, 0, sizeof(remaddr_s));
     int slen=sizeof(remaddr_s);
@@ -159,8 +166,11 @@ void send_string_to(string ip,int port,string &content){
         exit(1);
     }
     //std::string s = "here we go with first one!";
+    while(writelock){}
+    writelock = 1;
     if (sendto(sendfd, content_with_id.c_str(), content_with_id.size(), 0, (struct sockaddr *)&remaddr_s, slen)==-1)
         perror("sendto");
+    writelock = 0;
 }
 
 void construct_buffer(string &s){
@@ -177,6 +187,7 @@ void construct_buffer(string &s){
 void send_neighbor(){
     string s;
     construct_buffer(s);
+    //std::cout<<sendcount++<<std::endl;
     for (auto &neigh:neighbor_list)
     {
         send_string_to(neigh.second.dest_ip, neigh.second.dest_port, s);
@@ -184,11 +195,24 @@ void send_neighbor(){
     gettimeofday(&last_send,NULL);
 }
 void send_neighbor(string identify){
-    string s = "LINKDOWN,"+local_identify;
+    string s = "LINKDOWN,"+local_identify+",";
     for (auto &neigh:neighbor_list)
     {
-        if(neigh.second.dest()==identify)
+        if(neigh.second.dest()==identify){
             send_string_to(neigh.second.dest_ip, neigh.second.dest_port, s);
+            break;
+        }
+    }
+    gettimeofday(&last_send,NULL);
+}
+void send_neighbor_resume(string identify){
+    string s = "LINKUP,"+local_identify+",";
+    for (auto &neigh:neighbor_list)
+    {
+        if(neigh.second.dest()==identify){
+            send_string_to(neigh.second.dest_ip, neigh.second.dest_port, s);
+            break;
+        }
     }
     gettimeofday(&last_send,NULL);
 }
@@ -211,7 +235,6 @@ string construct_dv(string s,dv_type &n,string &from){
                 n[ds.dest()] = ds;
             }
         }
-        //std::cout<<token<<std::endl;
     }
     return identify;
 }
@@ -241,15 +264,25 @@ void update_dv(string from_ip,int from_port,dv_type &n){
         auto it = dvec.find(entry.dest());//for same destination, compare cur with the one neighbor provide
         //auto it2 = dvec.find(from); //find neighbor in local dv
         if(it!=dvec.end()){
-            if(INT_MAX-1000 - it2->second.cost > entry.cost && it->second.cost > it2->second.cost+entry.cost){
+            if(INT_MAX-1000 - it2->second.cost > entry.cost && it->second.cost >= it2->second.cost+entry.cost){
+                if(it->second.cost > it2->second.cost+entry.cost)  modify =1;
                 it->second.cost = it2->second.cost+entry.cost;
                 it->second.link = from;
-                modify =1;
             }
             else if(it->second.link == from){  //however, if you have no choice, you update you path
                 //to this dest by selecting from all neighbot again.
+                int cur_cost = it->second.cost;
+                string cur_link = it->second.link;
                 string record;
                 int best = INT_MAX-1000;
+                for (auto &x:neighbor_list) {
+                    if (x.second.dest()==entry.dest()) {    //if dest is already you neighbor
+                        best = x.second.cost;
+                        record = x.second.dest();
+                        break;
+                    }
+                }
+                
                 for(auto &x:neighbor_list){
                     if(x.second.v.find(entry.dest()) == x.second.v.end() ) //cur neigh do not have a path to dest
                         continue;
@@ -260,7 +293,9 @@ void update_dv(string from_ip,int from_port,dv_type &n){
                 }
                 it->second.cost = best;
                 it->second.link = record;    //dest here means ip+port
-                modify = 1;
+                if (cur_cost!=best or cur_link!=record) {
+                    modify = 1;
+                }
             }
         }
         else{
@@ -287,6 +322,7 @@ void counter(){
             send_neighbor();
         }
         sleeptime = (int)(TIMEOUT -sec/1000);
+        //std::cout<<"Sleep time "<<sleeptime<<std::endl;
         sleep(sleeptime);
     }
     return;
@@ -344,12 +380,11 @@ void break_link(string ip,int port){
     for (auto &y:dvec) {
         if(y.second.link == tmp){
             string dest = y.second.dest();
-            best = INT_MAX-1000;
             //set to infi
             y.second.cost = INT_MAX-1000;
             
             string record;
-            int best = INT_MAX-1000;
+            best = INT_MAX-1000;
             for(auto &x:neighbor_list){
                 if(x.second.v.find(tmp) == x.second.v.end() ) //cur neigh do not have a path to dest
                     continue;
@@ -362,6 +397,47 @@ void break_link(string ip,int port){
             y.second.link = record;    //dest here means ip+port
         }
     }
+    //std::cout<<"After break dv is now\n";show_dv();
+    send_neighbor();
+}
+void resume_link(string ip,int port){
+    string tmp = ip+":"+std::to_string(port);
+    auto it = neighbor_list.find(tmp);
+    if(it == neighbor_list.end()){
+        std::cout<<"The link you want to resume does not exist\n";
+        return;
+    }
+    it->second.cost = neighbor_list_backup[tmp].cost;
+    
+    auto it1 = dvec.find(tmp);
+    if(it1 == dvec.end()){
+        std::cout<<"The link you want to resume does not exist\n";
+        return;
+    }
+    send_neighbor_resume(tmp);
+    string record;
+    int best;
+    for (auto &y:dvec) {
+        if(y.second.link == tmp){
+            string dest = y.second.dest();
+            //set to infi
+            y.second.cost = INT_MAX-1000;
+            
+            string record;
+            best = INT_MAX-1000;
+            for(auto &x:neighbor_list){
+                if(x.second.v.find(tmp) == x.second.v.end() ) //cur neigh do not have a path to dest
+                    continue;
+                if(INT_MAX-1000 - x.second.cost>x.second.v[dest].cost && x.second.cost+x.second.v[dest].cost < best){
+                    best = x.second.cost+x.second.v[dest].cost;
+                    record = x.second.dest();
+                }
+            }
+            y.second.cost = best;
+            y.second.link = record;    //dest here means ip+port
+        }
+    }
+    //std::cout<<"After break dv is now\n";show_dv();
     send_neighbor();
 }
 void receiver(){
@@ -374,7 +450,8 @@ void receiver(){
         recvfrom(rev_fd, buf, 1024, 0, (struct sockaddr *)&remaddr_r, &addrlen);
         string s(buf,strlen(buf));
         if(s.substr(0,8)=="LINKDOWN"){
-            string downlink = s.substr(8);
+            string downlink = s.substr(9);
+            downlink = downlink.substr(0,downlink.find(","));
             auto it = dvec.find(downlink);
             neighbor_list[downlink].cost = INT_MAX - 1000;
             if(it!=dvec.end()){
@@ -383,12 +460,21 @@ void receiver(){
                 send_neighbor();
             }
             continue;
-            //send_neighbor(downlink);
+        }
+        else if(s.substr(0,6)=="LINKUP"){
+            string uplink = s.substr(7);
+            uplink = uplink.substr(0,uplink.find(","));
+            auto it = dvec.find(uplink);
+            neighbor_list[uplink].cost = neighbor_list_backup[uplink].cost;
+            if(it!=dvec.end()){
+                it->second.cost = neighbor_list[uplink].cost;
+                it->second.link = uplink;
+            }
+            continue;
         }
         string from;
         int fromport;
         identify = construct_dv(s, n,from);
-        if(identify == "LINKDOWN")
         local_identify = identify;
         pos = identify.find(":");
         ip = identify.substr(0,pos);
@@ -401,28 +487,6 @@ void receiver(){
     return;
 }
 
-void b(){
-    dv_type tmp;
-    dvec_seg ds1("C",4117,10,"C:4117");
-    dvec_seg ds2("D",4118,5,"D:4118");
-    dvec_seg ds3("A",4115,5,"A:4115");
-    tmp.insert({"C:4117",ds1});
-    tmp.insert({"D:4118",ds2});
-    tmp.insert({"A:4115",ds3});
-    update_dv("B",4116, tmp);
-    return;
-}
-void d(){
-    dv_type tmp;
-    dvec_seg ds11("A",4115,30,"B:4116");
-    dvec_seg ds22("B",4116,5,"B:4116");
-    dvec_seg ds33("C",4117,15,"B:4116");
-    tmp.insert({"A:4115",ds11});
-    tmp.insert({"B:4116",ds22});
-    tmp.insert({"C:4117",ds33});
-    update_dv("D",4118, tmp);
-    return;
-}
 int main(int argc, char const *argv[])
 {
     if(argc<3 || argc%3!=0){
@@ -444,6 +508,7 @@ int main(int argc, char const *argv[])
         string l = ip + ":" + std::to_string(port);
         dvec[l] = dvec_seg(ip,port,w,l);
         neighbor_list[l] = neighbor_seg(ip,port,w,l);
+        neighbor_list_backup[l] = neighbor_seg(ip,port,w,l);
     }
     gettimeofday(&last_send,NULL);
     std::thread r(receiver);
@@ -465,6 +530,13 @@ int main(int argc, char const *argv[])
             string ip = tmp.substr(0,pos);
             int port = atoi(tmp.substr(pos).c_str());
             break_link(ip,port);
+        }
+        else if (!strncmp(buffer, "LINKUP", 6)){
+            string tmp(buffer+7);
+            size_t pos = tmp.find(" ");
+            string ip = tmp.substr(0,pos);
+            int port = atoi(tmp.substr(pos).c_str());
+            resume_link(ip,port);
         }
         else{
             std::cout<<"Bad input\n";
