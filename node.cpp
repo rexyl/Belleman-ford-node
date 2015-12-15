@@ -246,9 +246,13 @@ void update_dv(string from_ip,int from_port,dv_type &n){
     
     if (it1 == neighbor_list.end()) {
         auto a = n.find(local_identify);
-        neighbor_seg s(from_ip,from_port,a->second.cost , from);
-        std::pair<string,neighbor_seg> p(from,s);
-        neighbor_list.insert(p);
+        neighbor_list[from].cost = a->second.cost;
+        neighbor_list[from].dest_ip = from_ip;
+        neighbor_list[from].dest_port = from_port;
+        neighbor_list[from].v = n;
+        dvec[from].cost=a->second.cost;
+        dvec[from].dest_ip = from_ip;
+        dvec[from].dest_port = from_port;
     }
     else{
         it1->second.v = n;
@@ -415,28 +419,18 @@ void resume_link(string ip,int port){
         return;
     }
     send_neighbor_resume(tmp);
-    string record;
-    int best;
-    for (auto &y:dvec) {
-        if(y.second.link == tmp){
-            string dest = y.second.dest();
-            //set to infi
-            y.second.cost = INT_MAX-1000;
-            
-            string record;
-            best = INT_MAX-1000;
-            for(auto &x:neighbor_list){
-                if(x.second.v.find(tmp) == x.second.v.end() ) //cur neigh do not have a path to dest
-                    continue;
-                if(INT_MAX-1000 - x.second.cost>x.second.v[dest].cost && x.second.cost+x.second.v[dest].cost < best){
-                    best = x.second.cost+x.second.v[dest].cost;
-                    record = x.second.dest();
-                }
-            }
-            y.second.cost = best;
-            y.second.link = record;    //dest here means ip+port
+    string record = it->second.dest();
+    int best = it->second.cost;
+    for(auto &x:neighbor_list){
+        if(x.second.v.find(tmp) == x.second.v.end() ) //cur neigh do not have a path to dest
+            continue;
+        if(INT_MAX-1000 - x.second.cost>x.second.v[tmp].cost && x.second.cost+x.second.v[tmp].cost < best){
+            best = x.second.cost+x.second.v[tmp].cost;
+            record = x.second.dest();
         }
     }
+    dvec[tmp].cost = best;
+    dvec[tmp].link = record;
     //std::cout<<"After break dv is now\n";show_dv();
     send_neighbor();
 }
@@ -524,6 +518,9 @@ int main(int argc, char const *argv[])
         if (!strncmp(buffer, "SHOWRT", 6)) {
             show_dv();
         }
+        else if(!strncmp(buffer, "SHOWNT", 6)){
+            show_nv();
+        }
         else if (!strncmp(buffer, "LINKDOWN", 8)) {
             string tmp(buffer+9);
             size_t pos = tmp.find(" ");
@@ -538,6 +535,7 @@ int main(int argc, char const *argv[])
             int port = atoi(tmp.substr(pos).c_str());
             resume_link(ip,port);
         }
+        
         else{
             std::cout<<"Bad input\n";
         }
