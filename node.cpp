@@ -481,9 +481,19 @@ void receiver(){
     }
     return;
 }
-
+void sighandler(int sig)
+{
+    close(sendfd);
+    close(rev_fd);
+    exit(0);
+}
 int main(int argc, char const *argv[])
 {
+    /******** handle control+c ******************************/
+    signal(SIGABRT, &sighandler);
+    signal(SIGTERM, &sighandler);
+    signal(SIGINT, &sighandler);
+
     if(argc<3 || argc%3!=0){
         std::cout<<"Wrong input format!\n";
         return 0;
@@ -536,7 +546,11 @@ int main(int argc, char const *argv[])
             int port = atoi(tmp.substr(pos).c_str());
             resume_link(ip,port);
         }
-        
+        else if (!strncmp(buffer, "CLOSE", 5)){
+            close(sendfd);
+            close(rev_fd);
+            return 0;
+        }
         else{
             std::cout<<"Bad input\n";
         }
