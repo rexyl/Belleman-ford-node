@@ -20,6 +20,7 @@
 #include <netinet/in.h>
 #include <sstream>
 #include <climits>
+#include <csignal>
 typedef std::string string;
 
 string local_identify;
