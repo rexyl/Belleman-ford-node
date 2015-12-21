@@ -19,7 +19,7 @@
 #include <ifaddrs.h>
 #include <netinet/in.h>
 #include <sstream>
-
+#include <climits>
 typedef std::string string;
 
 string local_identify;
@@ -181,7 +181,8 @@ void construct_buffer(string &s){
         dvec_seg ds = x.second;
         s += ds.dest_ip+","+std::to_string(ds.dest_port)+","+std::to_string(ds.cost)+","+ds.link+",";
     }
-    s.pop_back();
+    //s.pop_back();
+    s = s.substr(0,s.size()-1);
     return;
 }
 void send_neighbor(){
