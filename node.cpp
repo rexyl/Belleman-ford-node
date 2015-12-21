@@ -540,20 +540,5 @@ int main(int argc, char const *argv[])
             std::cout<<"Bad input\n";
         }
     }
-    //    d();
-    //    show_dv();
-    //    b();
-    //    show_dv();
-    //    //show_nv();
-    //    break_link("B", 4116);
-    //    show_dv();
-    //    //show_nv();
-    //    string trash;
-    //    construct_buffer(trash);
-    //    std::cout<<trash<<std::endl;
-    //    dv_type tm;
-    //    dvec.clear();
-    //    construct_dv(trash, dvec);
-    //    show_dv();
     return 0;
 }
