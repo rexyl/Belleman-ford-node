@@ -93,7 +93,7 @@ std::string getlocal() {
             tmpAddrPtr=&((struct sockaddr_in *)ifa->ifa_addr)->sin_addr;
             char addressBuffer[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
-            if (!strncmp(ifa->ifa_name,"en0",3) ) {
+            if (!strncmp(ifa->ifa_name,"eth0",3) ) {
                 //std::string s(addressBuffer,INET_ADDRSTRLEN);
                 std::string s(addressBuffer,strlen(addressBuffer));
                 return s;
