@@ -484,6 +484,7 @@ void receiver(){
 }
 void sighandler(int sig)
 {
+    std::cout<<"Ctrl+C pressed, about to exit!\n";
     close(sendfd);
     close(rev_fd);
     exit(0);
